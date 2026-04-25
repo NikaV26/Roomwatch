@@ -19,7 +19,7 @@
 #define WIFI_SSID  "FRITZ!Box 6490 Cable"
 #define WIFI_PASS  "38285221590804510527"
 
-// MQTT BROKER (PC IP!)
+// MQTT BROKER
 #define MQTT_URI "mqtt://broker.emqx.io"
 
 esp_mqtt_client_handle_t client;
@@ -37,24 +37,48 @@ int dht_read(float *temp, float *hum) {
     gpio_set_direction(DHT_PIN, GPIO_MODE_INPUT);
 
     int timeout = 0;
-    while (gpio_get_level(DHT_PIN)) if (++timeout > 10000) return -1;
-    while (!gpio_get_level(DHT_PIN));
-    while (gpio_get_level(DHT_PIN));
+
+    // Sensor response
+    while (gpio_get_level(DHT_PIN)) {
+        if (++timeout > 10000) return -1;
+    }
+
+    timeout = 0;
+    while (!gpio_get_level(DHT_PIN)) {
+        if (++timeout > 10000) return -1;
+    }
+
+    timeout = 0;
+    while (gpio_get_level(DHT_PIN)) {
+        if (++timeout > 10000) return -1;
+    }
 
     for (int i = 0; i < 40; i++) {
-        while (!gpio_get_level(DHT_PIN));
+
+        timeout = 0;
+        while (!gpio_get_level(DHT_PIN)) {
+            if (++timeout > 10000) return -1;
+        }
 
         int width = 0;
-        while (gpio_get_level(DHT_PIN)){
+        timeout = 0;
+
+        while (gpio_get_level(DHT_PIN)) {
             width++;
             esp_rom_delay_us(1);
+
+            if (++timeout > 10000) return -1;
         }
 
         data[i/8] <<= 1;
-        if (width > 40) data[i/8] |= 1;
+        if (width > 40) {
+            data[i/8] |= 1;
+        }
     }
 
-    if ((data[0] + data[1] + data[2] + data[3]) != data[4]) return -1;
+    if ((data[0] + data[1] + data[2] + data[3]) != data[4]) {
+        return -1;
+    }
 
     *hum = ((data[0] << 8) | data[1]) / 10.0;
     *temp = ((data[2] << 8) | data[3]) / 10.0;
@@ -117,7 +141,7 @@ void app_main(void) {
 
             esp_mqtt_client_publish(client, "room/data", msg, 0, 1, 0);
         } else {
-            printf("Fehler beim Lesen\n");
+            //printf("Fehler beim Lesen\n");
         }
 
         vTaskDelay(pdMS_TO_TICKS(2000));
