@@ -1,46 +1,62 @@
 #include <stdio.h>
-#include <inttypes.h>
-#include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_chip_info.h"
-#include "esp_flash.h"
-#include "esp_system.h"
+#include "driver/gpio.h"
+#include "esp_rom_sys.h"
 
-void app_main(void)
-{
-    printf("Hello world!\n");
+#define DHT_PIN GPIO_NUM_5
 
-    /* Print chip information */
-    esp_chip_info_t chip_info;
-    uint32_t flash_size;
-    esp_chip_info(&chip_info);
-    printf("This is %s chip with %d CPU core(s), %s%s%s%s, ",
-           CONFIG_IDF_TARGET,
-           chip_info.cores,
-           (chip_info.features & CHIP_FEATURE_WIFI_BGN) ? "WiFi/" : "",
-           (chip_info.features & CHIP_FEATURE_BT) ? "BT" : "",
-           (chip_info.features & CHIP_FEATURE_BLE) ? "BLE" : "",
-           (chip_info.features & CHIP_FEATURE_IEEE802154) ? ", 802.15.4 (Zigbee/Thread)" : "");
+int dht_read(float *temp, float *hum) {
+    uint8_t data[5] = {0};
 
-    unsigned major_rev = chip_info.revision / 100;
-    unsigned minor_rev = chip_info.revision % 100;
-    printf("silicon revision v%d.%d, ", major_rev, minor_rev);
-    if(esp_flash_get_size(NULL, &flash_size) != ESP_OK) {
-        printf("Get flash size failed");
-        return;
+    // Startsignal
+    gpio_set_direction(DHT_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(DHT_PIN, 0);
+    vTaskDelay(pdMS_TO_TICKS(20));
+
+    gpio_set_level(DHT_PIN, 1);
+    esp_rom_delay_us(40);
+    gpio_set_direction(DHT_PIN, GPIO_MODE_INPUT);
+
+    // Antwort abwarten
+    int timeout = 0;
+    while (gpio_get_level(DHT_PIN)) if (++timeout > 10000) return -1;
+    while (!gpio_get_level(DHT_PIN));
+    while (gpio_get_level(DHT_PIN));
+
+    // 40 Bits lesen
+    for (int i = 0; i < 40; i++) {
+        while (!gpio_get_level(DHT_PIN));
+
+        int width = 0;
+        while (gpio_get_level(DHT_PIN)) {
+            width++;
+            esp_rom_delay_us(1);
+        }
+
+        data[i/8] <<= 1;
+        if (width > 40) data[i/8] |= 1;
     }
 
-    printf("%" PRIu32 "MB %s flash\n", flash_size / (uint32_t)(1024 * 1024),
-           (chip_info.features & CHIP_FEATURE_EMB_FLASH) ? "embedded" : "external");
+    // Checksum
+    if ((data[0] + data[1] + data[2] + data[3]) != data[4]) return -1;
 
-    printf("Minimum free heap size: %" PRIu32 " bytes\n", esp_get_minimum_free_heap_size());
+    *hum = ((data[0] << 8) | data[1]) / 10.0;
+    *temp = ((data[2] << 8) | data[3]) / 10.0;
 
-    for (int i = 10; i >= 0; i--) {
-        printf("Restarting in %d seconds...\n", i);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    return 0;
+}
+
+void app_main(void) {
+    float t, h;
+
+    while (1) {
+        if (dht_read(&t, &h) == 0) {
+            printf("Temp: %.1f °C | Hum: %.1f %%\n", t, h);
+        } else {
+            printf("Fehler beim Lesen\n");
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
-    printf("Restarting now.\n");
-    fflush(stdout);
-    esp_restart();
 }
